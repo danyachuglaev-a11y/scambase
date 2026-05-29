@@ -919,9 +919,17 @@ async def moderate_decline(callback: CallbackQuery):
     if not await is_admin_async(callback.from_user.id):
         await callback.answer("Доступ запрещён", show_alert=True)
         return
-    current_caption = callback.message.caption or ""
-    await callback.message.edit_caption(caption=current_caption + "\n\n❌ ОТКЛОНЕНО")
-    await callback.answer("Жалоба отклонена")
+    
+    try:
+        # Пробуем отредактировать подпись (если есть)
+        if callback.message.caption:
+            await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ ОТКЛОНЕНО")
+        else:
+            # Если подписи нет — редактируем текст
+            await callback.message.edit_text(callback.message.text + "\n\n❌ ОТКЛОНЕНО")
+    except Exception as e:
+        # Если не получилось — просто отвечаем
+        await callback.answer("❌ Жалоба отклонена", show_alert=True)
 
 
 # ======================================================
