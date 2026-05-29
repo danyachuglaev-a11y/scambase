@@ -55,8 +55,7 @@ async def create_db():
             reputation TEXT DEFAULT 'clean',
             reason TEXT DEFAULT '',
             likes INTEGER DEFAULT 0,
-            dislikes INTEGER DEFAULT 0,
-            views INTEGER DEFAULT 0
+            dislikes INTEGER DEFAULT 0
         )
         """)
 
@@ -238,10 +237,13 @@ async def save_vote(voter_id: int, target_username: str, vote_type: str):
 
 async def add_scammer_to_db(username: str, reason: str):
     async with aiosqlite.connect("scam.db") as db:
+        cursor = await db.execute("SELECT 1 FROM users WHERE username = ?", (username.lower(),))
+        if not await cursor.fetchone():
+            await db.execute("INSERT INTO users (username) VALUES (?)", (username.lower(),))
+        
         await db.execute("""
-        INSERT OR REPLACE INTO users (username, reputation, reason)
-        VALUES (?, ?, ?)
-        """, (username.lower(), "scammer", reason))
+        UPDATE users SET reputation = 'scammer', reason = ? WHERE username = ?
+        """, (reason, username.lower()))
         await db.commit()
 
 
@@ -302,8 +304,7 @@ main_menu = InlineKeyboardMarkup(inline_keyboard=[
 admin_menu = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
     [InlineKeyboardButton(text="🏆 Добавить гаранта", callback_data="admin_add_garant")],
-    [InlineKeyboardButton(text="👍 Накрутить лайки", callback_data="admin_likes"),
-     InlineKeyboardButton(text="👁 Накрутить просмотры", callback_data="admin_views")],
+    [InlineKeyboardButton(text="👍 Накрутить лайки", callback_data="admin_likes")],
     [InlineKeyboardButton(text="🖼️ ЗАГРУЗИТЬ КАРТИНКИ", callback_data="admin_upload_images"),
      InlineKeyboardButton(text="🖼️ ЗАГРУЗИТЬ МЕНЮ", callback_data="admin_upload_menu")],
     [InlineKeyboardButton(text="👑 Управление админами", callback_data="admin_manage")]
@@ -339,11 +340,6 @@ class GarantState(StatesGroup):
 
 
 class AddLikesState(StatesGroup):
-    username = State()
-    amount = State()
-
-
-class AddViewsState(StatesGroup):
     username = State()
     amount = State()
 
@@ -468,45 +464,46 @@ async def check_user(message: Message, state: FSMContext):
             cursor = await db.execute("SELECT * FROM users WHERE username=?", (username,))
             user = await cursor.fetchone()
 
-        if user:
-            await db.execute("UPDATE users SET views = views + 1 WHERE username=?", (user[0],))
-            await db.commit()
-            cursor = await db.execute("SELECT * FROM users WHERE username=?", (user[0],))
-            user = await cursor.fetchone()
-
     clean_img = await get_image_from_db("clean")
     scammer_img = await get_image_from_db("scammer")
     guarantor_img = await get_image_from_db("guarantor")
 
     display_name = f"@{user[0]}" if user else raw_input
+    
+    likes = user[3] if user else 0
+    dislikes = user[4] if user else 0
 
     if garant:
-        text = f"🏆 ПРОВЕРЕННЫЙ ГАРАНТ\n\n👤 {display_name}\n\n🟢 Пользователь является официальным гарантом.\n\n💰 Гарантия: {garant[1]}\n⭐ Репутация: {garant[2]}/100\n\n✅ Можно работать."
+        text = f"🏆 ПРОВЕРЕННЫЙ ГАРАНТ\n\n👤 {display_name}\n\n🟢 Пользователь является официальным гарантом.\n\n💰 Гарантия: {garant[1]}\n⭐ Репутация: {garant[2]}/100\n\n👍 Доверие: {likes}\n👎 Жалобы: {dislikes}\n\n✅ Можно работать."
         if guarantor_img:
             await message.answer_photo(photo=guarantor_img, caption=text)
         else:
             await message.answer(text)
+    
     elif user and user[1] == "scammer":
         proof_link = await get_scammer_post_link(user[0])
-        text = f"🚨 Mint base CHECK\n\n👤 {display_name}\n\n🔴 Репутация: SCAMMER\n\n📄 Причина:\n{user[2]}\n\n❌ НЕ РЕКОМЕНДУЕТСЯ К СОТРУДНИЧЕСТВУ"
+        text = f"🚨 Mint base CHECK\n\n👤 {display_name}\n\n🔴 Репутация: SCAMMER\n\n📄 Причина:\n{user[2]}\n\n👍 Доверие: {likes}\n👎 Жалобы: {dislikes}\n\n❌ НЕ РЕКОМЕНДУЕТСЯ К СОТРУДНИЧЕСТВУ"
         if proof_link:
             text += f"\n\n📎 *Доказательства:* [Смотреть в группе]({proof_link})"
         if scammer_img:
             await message.answer_photo(photo=scammer_img, caption=text, parse_mode="Markdown", disable_web_page_preview=True)
         else:
             await message.answer(text, parse_mode="Markdown", disable_web_page_preview=True)
+    
     else:
-        text = f"🛡 Mint base CHECK\n\n👤 {display_name}\n\n🟠 Репутация: чист\nЖалоб не обнаружено.\n\n⚠️ Используйте гарантов для безопасных сделок."
+        text = f"🛡 Mint base CHECK\n\n👤 {display_name}\n\n🟠 Репутация: чист\nЖалоб не обнаружено.\n\n👍 Доверие: {likes}\n👎 Жалобы: {dislikes}\n\n⚠️ Используйте гарантов для безопасных сделок."
         if clean_img:
             await message.answer_photo(photo=clean_img, caption=text)
         else:
             await message.answer(text)
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"👍 {user[3] if user else 0}", callback_data=f"like:{user[0] if user else username}"),
-         InlineKeyboardButton(text=f"👎 {user[4] if user else 0}", callback_data=f"dislike:{user[0] if user else username}")]
-    ])
-    await message.answer("Оцените пользователя:", reply_markup=kb)
+    if user:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"👍 {likes}", callback_data=f"like:{user[0]}"),
+             InlineKeyboardButton(text=f"👎 {dislikes}", callback_data=f"dislike:{user[0]}")]
+        ])
+        await message.answer("Оцените пользователя:", reply_markup=kb)
+    
     await state.clear()
 
 
@@ -991,6 +988,61 @@ async def admin_back(callback: CallbackQuery):
 
 
 # ======================================================
+# НАКРУТКА ЛАЙКОВ
+# ======================================================
+
+@dp.callback_query(F.data == "admin_likes")
+async def add_likes_start(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin_async(callback.from_user.id):
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+    await state.set_state(AddLikesState.username)
+    await callback.message.edit_text("👍 НАКРУТКА ЛАЙКОВ\n\nВведите username:")
+
+
+@dp.message(AddLikesState.username)
+async def add_likes_username(message: Message, state: FSMContext):
+    if not await is_admin_async(message.from_user.id):
+        await message.answer("⛔ Доступ запрещён")
+        await state.clear()
+        return
+    await state.update_data(username=message.text.replace("@", "").lower())
+    await state.set_state(AddLikesState.amount)
+    await message.answer("👍 Введите количество лайков")
+
+
+@dp.message(AddLikesState.amount)
+async def add_likes_finish(message: Message, state: FSMContext):
+    if not await is_admin_async(message.from_user.id):
+        await message.answer("⛔ Доступ запрещён")
+        await state.clear()
+        return
+    data = await state.get_data()
+    username = data["username"]
+    try:
+        amount = int(message.text)
+    except ValueError:
+        await message.answer("❌ Ошибка: нужно ввести число")
+        await state.clear()
+        return
+
+    async with aiosqlite.connect("scam.db") as db:
+        cursor = await db.execute("SELECT 1 FROM users WHERE username = ?", (username,))
+        if not await cursor.fetchone():
+            await db.execute("INSERT INTO users (username) VALUES (?)", (username,))
+        
+        await db.execute("UPDATE users SET likes = likes + ? WHERE username=?", (amount, username))
+        await db.commit()
+        
+        cursor = await db.execute("SELECT likes FROM users WHERE username=?", (username,))
+        result = await cursor.fetchone()
+        new_likes = result[0] if result else 0
+
+    await message.answer(f"✅ Накручено {amount} лайков пользователю @{username}\n📊 Теперь лайков: {new_likes}")
+    await state.clear()
+
+
+# ======================================================
 # ЗАГРУЗКА КАРТИНОК
 # ======================================================
 
@@ -1223,90 +1275,6 @@ async def garant_finish(message: Message, state: FSMContext):
         await db.commit()
 
     await message.answer(f"✅ @{username} добавлен\n💰 Гарантия: {amount}")
-    await state.clear()
-
-
-# ======================================================
-# ADD LIKES
-# ======================================================
-
-@dp.callback_query(F.data == "admin_likes")
-async def add_likes_start(callback: CallbackQuery, state: FSMContext):
-    if not await is_admin_async(callback.from_user.id):
-        await callback.answer("Доступ запрещён", show_alert=True)
-        return
-    await state.set_state(AddLikesState.username)
-    await callback.message.edit_text("👍 НАКРУТКА ЛАЙКОВ\n\nВведите username:")
-
-
-@dp.message(AddLikesState.username)
-async def add_likes_username(message: Message, state: FSMContext):
-    if not await is_admin_async(message.from_user.id):
-        await message.answer("⛔ Доступ запрещён")
-        await state.clear()
-        return
-    await state.update_data(username=message.text.replace("@", "").lower())
-    await state.set_state(AddLikesState.amount)
-    await message.answer("👍 Введите количество лайков")
-
-
-@dp.message(AddLikesState.amount)
-async def add_likes_finish(message: Message, state: FSMContext):
-    if not await is_admin_async(message.from_user.id):
-        await message.answer("⛔ Доступ запрещён")
-        await state.clear()
-        return
-    data = await state.get_data()
-    username = data["username"]
-    amount = int(message.text)
-
-    async with aiosqlite.connect("scam.db") as db:
-        await db.execute("UPDATE users SET likes = likes + ? WHERE username=?", (amount, username))
-        await db.commit()
-
-    await message.answer(f"✅ Накручено {amount} лайков пользователю @{username}")
-    await state.clear()
-
-
-# ======================================================
-# ADD VIEWS
-# ======================================================
-
-@dp.callback_query(F.data == "admin_views")
-async def add_views_start(callback: CallbackQuery, state: FSMContext):
-    if not await is_admin_async(callback.from_user.id):
-        await callback.answer("Доступ запрещён", show_alert=True)
-        return
-    await state.set_state(AddViewsState.username)
-    await callback.message.edit_text("👁 НАКРУТКА ПРОСМОТРОВ\n\nВведите username:")
-
-
-@dp.message(AddViewsState.username)
-async def add_views_username(message: Message, state: FSMContext):
-    if not await is_admin_async(message.from_user.id):
-        await message.answer("⛔ Доступ запрещён")
-        await state.clear()
-        return
-    await state.update_data(username=message.text.replace("@", "").lower())
-    await state.set_state(AddViewsState.amount)
-    await message.answer("👁 Введите количество просмотров")
-
-
-@dp.message(AddViewsState.amount)
-async def add_views_finish(message: Message, state: FSMContext):
-    if not await is_admin_async(message.from_user.id):
-        await message.answer("⛔ Доступ запрещён")
-        await state.clear()
-        return
-    data = await state.get_data()
-    username = data["username"]
-    amount = int(message.text)
-
-    async with aiosqlite.connect("scam.db") as db:
-        await db.execute("UPDATE users SET views = views + ? WHERE username=?", (amount, username))
-        await db.commit()
-
-    await message.answer(f"✅ Накручено {amount} просмотров пользователю @{username}")
     await state.clear()
 
 
